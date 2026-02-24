@@ -527,6 +527,43 @@ class SaveLatent:
         comfy.utils.save_torch_file(output, file, metadata=metadata)
         return { "ui": { "latents": results } }
 
+class SaveConditioning:
+    def __init__(self):
+        self.output_dir = folder_paths.get_output_directory()
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { 
+                    "conditioning": ("CONDITIONING", ),
+                    "filename_prefix": ("STRING", {"default": "conditioning/ComfyUI"})
+                },
+                "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "save"
+    OUTPUT_NODE = True
+    CATEGORY = "BCI_Research"
+
+    def save(self, conditioning, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
+        full_output_folder, filename, counter, subfolder, filename_prefix = \
+            folder_paths.get_save_image_path(filename_prefix, self.output_dir)
+
+        file = f"{filename}_{counter:05}_.cond"
+        full_path = os.path.join(full_output_folder, file)
+
+        # PREPARE DATA: Conditioning is a list [(tensor, metadata_dict), ...]
+        # We must ensure we save it in a way that torch can serialize
+        data_to_save = {
+            "node_type": "CONDITIONING",
+            "data": conditioning 
+        }
+
+        # Use torch.save directly instead of comfy.utils.save_torch_file
+        # torch.save can handle lists and complex objects, whereas save_torch_file is stricter
+        torch.save(data_to_save, full_path)
+
+        return { "ui": { "cond_file": [{ "filename": file, "subfolder": subfolder, "type": "output" }] } }
 
 class LoadLatent:
     SEARCH_ALIASES = ["import latent", "open latent"]
@@ -2067,6 +2104,7 @@ NODE_CLASS_MAPPINGS = {
     "ConditioningSetAreaPercentage": ConditioningSetAreaPercentage,
     "ConditioningSetAreaStrength": ConditioningSetAreaStrength,
     "ConditioningSetMask": ConditioningSetMask,
+    "SaveConditioning": SaveConditioning,
     "KSamplerAdvanced": KSamplerAdvanced,
     "SetLatentNoiseMask": SetLatentNoiseMask,
     "LatentComposite": LatentComposite,
@@ -2134,6 +2172,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ConditioningSetMask": "Conditioning (Set Mask)",
     "ControlNetApply": "Apply ControlNet (OLD)",
     "ControlNetApplyAdvanced": "Apply ControlNet",
+    "SaveConditioning": "Save Conditioning",
+
     # Latent
     "VAEEncodeForInpaint": "VAE Encode (for Inpainting)",
     "SetLatentNoiseMask": "Set Latent Noise Mask",
