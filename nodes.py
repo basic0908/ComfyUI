@@ -8,6 +8,7 @@ import json
 import glob
 import hashlib
 import inspect
+import csv
 
 import traceback
 import math
@@ -543,7 +544,7 @@ class SaveConditioning:
     RETURN_TYPES = ()
     FUNCTION = "save"
     OUTPUT_NODE = True
-    CATEGORY = "BCI_Research"
+    CATEGORY = "Custom"
 
     def save(self, conditioning, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
         full_output_folder, filename, counter, subfolder, filename_prefix = \
@@ -552,18 +553,86 @@ class SaveConditioning:
         file = f"{filename}_{counter:05}_.cond"
         full_path = os.path.join(full_output_folder, file)
 
-        # PREPARE DATA: Conditioning is a list [(tensor, metadata_dict), ...]
-        # We must ensure we save it in a way that torch can serialize
         data_to_save = {
             "node_type": "CONDITIONING",
-            "data": conditioning 
+            "data": conditioning
         }
 
-        # Use torch.save directly instead of comfy.utils.save_torch_file
-        # torch.save can handle lists and complex objects, whereas save_torch_file is stricter
         torch.save(data_to_save, full_path)
 
-        return { "ui": { "cond_file": [{ "filename": file, "subfolder": subfolder, "type": "output" }] } }
+        # -------- CSV LATENT SAVE --------
+        csv_root = r"C:\Users\iizukar\Documents\GitHub\nttkk-Vie2Image\output\csv"
+
+        folders = [
+            os.path.join(csv_root, d)
+            for d in os.listdir(csv_root)
+            if os.path.isdir(os.path.join(csv_root, d))
+        ]
+
+        if folders:
+            newest_folder = max(folders, key=os.path.getctime)
+            csv_file = os.path.join(newest_folder, "latent.csv")
+
+            # Extract latent vector from conditioning
+            latent_tensor = conditioning[0][0].detach().cpu().flatten().tolist()
+
+            write_header = not os.path.exists(csv_file)
+
+            with open(csv_file, "a", newline="") as f:
+                writer = csv.writer(f)
+
+                if write_header:
+                    writer.writerow([f"dim_{i}" for i in range(len(latent_tensor))])
+
+                writer.writerow(latent_tensor)
+
+        print("Latent Saved")
+
+        # ---------------------------------
+
+        return {
+            "ui": {
+                "cond_file": [{
+                    "filename": file,
+                    "subfolder": subfolder,
+                    "type": "output"
+                }]
+            }
+        }
+
+class LoadConditioning:
+    @classmethod
+    def INPUT_TYPES(s):
+        # We look into the input directory for files ending in .cond
+        input_dir = folder_paths.get_input_directory()
+        files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f)) and f.endswith(".cond")]
+        return {"required": {"conditioning": (sorted(files), )}}
+
+    CATEGORY = "Custom"
+    
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "load"
+
+    def load(self, conditioning_file):
+        # Use get_annotated_filepath to resolve the full path correctly
+        path = folder_paths.get_annotated_filepath(conditioning_file)
+        
+        # Load using torch because SaveConditioning used torch.save
+        # weights_only=False is needed if the conditioning contains complex objects (common in Comfy)
+        data = torch.load(path, weights_only=False, map_location="cpu")
+        
+        if "data" not in data:
+            raise ValueError(f"File {conditioning_file} is not a valid conditioning file.")
+            
+        return (data["data"], )
+
+    @classmethod
+    def IS_CHANGED(s, conditioning_file):
+        path = folder_paths.get_annotated_filepath(conditioning_file)
+        m = hashlib.sha256()
+        with open(path, 'rb') as f:
+            m.update(f.read())
+        return m.digest().hex()
 
 class LoadLatent:
     SEARCH_ALIASES = ["import latent", "open latent"]
@@ -1694,12 +1763,47 @@ class SaveImage:
 
     def save_images(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
         filename_prefix += self.prefix_append
-        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
+        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
+            filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0]
+        )
         results = list()
+
+        custom_output_folder = r"C:\Users\iizukar\Documents\GitHub\nttkk-Vie2Image\output\images"
+
+        folders = [
+            os.path.join(custom_output_folder, d)
+            for d in os.listdir(custom_output_folder)
+            if os.path.isdir(os.path.join(custom_output_folder, d))
+        ]
+
+        if not folders:
+            newest_folder = custom_output_folder
+        else:
+            newest_folder = max(folders, key=os.path.getctime)
+
+        # ---- find next counter based on existing files ----
+        existing_files = [f for f in os.listdir(newest_folder) if f.endswith(".png")]
+        if existing_files:
+            numbers = []
+            for f in existing_files:
+                try:
+                    num = int(f.split("_")[-2])
+                    numbers.append(num)
+                except:
+                    pass
+            if numbers:
+                counter = max(numbers) + 1
+            else:
+                counter = 0
+        else:
+            counter = 0
+        # ---------------------------------------------------
+
         for (batch_number, image) in enumerate(images):
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
             metadata = None
+
             if not args.disable_metadata:
                 metadata = PngInfo()
                 if prompt is not None:
@@ -1710,15 +1814,22 @@ class SaveImage:
 
             filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
             file = f"{filename_with_batch_num}_{counter:05}_.png"
-            img.save(os.path.join(full_output_folder, file), pnginfo=metadata, compress_level=self.compress_level)
+
+            img.save(
+                os.path.join(newest_folder, file),
+                pnginfo=metadata,
+                compress_level=self.compress_level
+            )
+
             results.append({
                 "filename": file,
                 "subfolder": subfolder,
                 "type": self.type
             })
+
             counter += 1
 
-        return { "ui": { "images": results } }
+        return {"ui": {"images": results}}
 
 class PreviewImage(SaveImage):
     def __init__(self):
@@ -2104,6 +2215,7 @@ NODE_CLASS_MAPPINGS = {
     "ConditioningSetAreaPercentage": ConditioningSetAreaPercentage,
     "ConditioningSetAreaStrength": ConditioningSetAreaStrength,
     "ConditioningSetMask": ConditioningSetMask,
+    "LoadConditioning": LoadConditioning,
     "SaveConditioning": SaveConditioning,
     "KSamplerAdvanced": KSamplerAdvanced,
     "SetLatentNoiseMask": SetLatentNoiseMask,
@@ -2172,7 +2284,14 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ConditioningSetMask": "Conditioning (Set Mask)",
     "ControlNetApply": "Apply ControlNet (OLD)",
     "ControlNetApplyAdvanced": "Apply ControlNet",
+
     "SaveConditioning": "Save Conditioning",
+    "LoadConditioning": "Load Conditioning",
+
+    "SaveLatent": "Save Latent",
+    "LoadLatent": "Load Latent",
+
+
 
     # Latent
     "VAEEncodeForInpaint": "VAE Encode (for Inpainting)",
