@@ -600,35 +600,35 @@ class SaveConditioning:
             }
         }
 
+import os
+import torch
+import hashlib
+import folder_paths
+
 class LoadConditioning:
     @classmethod
     def INPUT_TYPES(s):
-        # We look into the input directory for files ending in .cond
         input_dir = folder_paths.get_input_directory()
         files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f)) and f.endswith(".cond")]
         return {"required": {"conditioning": (sorted(files), )}}
 
     CATEGORY = "Custom"
-    
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "load"
 
-    def load(self, conditioning_file):
-        # Use get_annotated_filepath to resolve the full path correctly
-        path = folder_paths.get_annotated_filepath(conditioning_file)
-        
-        # Load using torch because SaveConditioning used torch.save
-        # weights_only=False is needed if the conditioning contains complex objects (common in Comfy)
+    def load(self, conditioning): # MATCHED NAME
+        path = folder_paths.get_annotated_filepath(conditioning)
         data = torch.load(path, weights_only=False, map_location="cpu")
         
         if "data" not in data:
-            raise ValueError(f"File {conditioning_file} is not a valid conditioning file.")
+            raise ValueError(f"File {conditioning} is not a valid conditioning file.")
             
         return (data["data"], )
 
     @classmethod
-    def IS_CHANGED(s, conditioning_file):
-        path = folder_paths.get_annotated_filepath(conditioning_file)
+    def IS_CHANGED(s, conditioning): # Change this from conditioning_file
+        path = folder_paths.get_annotated_filepath(conditioning)
+        import hashlib
         m = hashlib.sha256()
         with open(path, 'rb') as f:
             m.update(f.read())
@@ -646,7 +646,7 @@ class LoadLatent:
     CATEGORY = "_for_testing"
 
     RETURN_TYPES = ("LATENT", )
-    FUNCTION = "load"
+    FUNCTION = "loa"
 
     def load(self, latent):
         latent_path = folder_paths.get_annotated_filepath(latent)
